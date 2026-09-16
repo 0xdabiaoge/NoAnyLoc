@@ -6,11 +6,16 @@
 # 适用场景: LXC / KVM 虚拟化宿主机、物理母机出网总闸门
 # 核心作用: 在宿主机出网总闸门处，强力阻断流经系统及所有 LXC 容器的定位 API 请求，
 #           从根本上防止客户端因开启定位/Google GMS 上报导致宿主机与小鸡 IP 被“送中”。
+# 项目主页: https://github.com/0xdabiaoge/NoAnyLoc
 # ==============================================================================
 
 set -o pipefail
 
 # 全局配置常量
+SCRIPT_VERSION="v2.1"
+GITHUB_RAW_URL="https://raw.githubusercontent.com/0xdabiaoge/NoAnyLoc/main/noanyloc.sh"
+GHPROXY_RAW_URL="https://ghfast.top/https://raw.githubusercontent.com/0xdabiaoge/NoAnyLoc/main/noanyloc.sh"
+
 CONF_DIR="/etc/noanyloc"
 DOMAINS_FILE="${CONF_DIR}/domains.conf"
 CONFIG_FILE="${CONF_DIR}/noanyloc.conf"
@@ -57,6 +62,24 @@ check_root() {
     if [ "$(id -u)" -ne 0 ]; then
         echo -e "${RED}[错误]${NC} 必须使用 root 权限执行此脚本！"
         exit 1
+    fi
+}
+
+# 人性化数据流量单位转换 (B / KB / MB / GB)
+format_bytes() {
+    local bytes="$1"
+    if [ -z "${bytes}" ] || ! [[ "${bytes}" =~ ^[0-9]+$ ]]; then
+        echo "0 B"
+        return
+    fi
+    if [ "${bytes}" -lt 1024 ]; then
+        echo "${bytes} B"
+    elif [ "${bytes}" -lt 1048576 ]; then
+        awk "BEGIN {printf \"%.2f KB\", ${bytes}/1024}"
+    elif [ "${bytes}" -lt 1073741824 ]; then
+        awk "BEGIN {printf \"%.2f MB\", ${bytes}/1048576}"
+    else
+        awk "BEGIN {printf \"%.2f GB\", ${bytes}/1073741824}"
     fi
 }
 
@@ -638,38 +661,243 @@ diagnose_relocation_status() {
 # ==============================================================================
 
 show_detailed_status() {
-    clear
-    echo -e "${CYAN}${BOLD}================================================================${NC}"
-    echo -e "${CYAN}${BOLD}           NoAnyLoc-Host 防火墙实时拦截与命中统计               ${NC}"
-    echo -e "${CYAN}${BOLD}================================================================${NC}"
+    while true; do
+        clear
+        echo -e "${CYAN}${BOLD}================================================================================${NC}"
+        echo -e "${CYAN}${BOLD}           NoAnyLoc-Host 防火墙实时拦截战报与命中统计面板 (Dashboard)           ${NC}"
+        echo -e "${CYAN}${BOLD}================================================================================${NC}"
 
-    echo -e "${BOLD}【IPv4 命中统计】${NC}"
-    if iptables -L "${CHAIN_NAME}" -v -n 2>/dev/null; then
-        echo ""
-    else
-        echo -e "${YELLOW}未检测到 IPv4 NOANYLOC 链或规则未生效。${NC}\n"
+        local count_v4="0"
+        local count_v6="0"
+        if command -v ipset >/dev/null 2>&1; then
+            count_v4=$(ipset list "${IPSET4}" 2>/dev/null | grep -E '^Number of entries:' | awk '{print $4}' || echo "0")
+            count_v6=$(ipset list "${IPSET6}" 2>/dev/null | grep -E '^Number of entries:' | awk '{print $4}' || echo "0")
+        fi
+
+        # 解析 IPv4 数据包与字节统计
+        local v4_lines=""
+        local v4_total_pkts=0
+        local v4_total_bytes=0
+        local v4_active=0
+
+        if iptables -L "${CHAIN_NAME}" -v -n -x >/dev/null 2>&1; then
+            v4_active=1
+            v4_lines=$(iptables -L "${CHAIN_NAME}" -v -n -x 2>/dev/null | tail -n +3)
+            while read -r pkts bytes rest; do
+                if [[ "${pkts}" =~ ^[0-9]+$ ]]; then
+                    v4_total_pkts=$((v4_total_pkts + pkts))
+                    v4_total_bytes=$((v4_total_bytes + bytes))
+                fi
+            done <<< "${v4_lines}"
+        fi
+
+        # 解析 IPv6 数据包与字节统计
+        local v6_lines=""
+        local v6_total_pkts=0
+        local v6_total_bytes=0
+        local v6_active=0
+
+        if has_ipv6 && command -v ip6tables >/dev/null 2>&1 && ip6tables -L "${CHAIN_NAME}" -v -n -x >/dev/null 2>&1; then
+            v6_active=1
+            v6_lines=$(ip6tables -L "${CHAIN_NAME}" -v -n -x 2>/dev/null | tail -n +3)
+            while read -r pkts bytes rest; do
+                if [[ "${pkts}" =~ ^[0-9]+$ ]]; then
+                    v6_total_pkts=$((v6_total_pkts + pkts))
+                    v6_total_bytes=$((v6_total_bytes + bytes))
+                fi
+            done <<< "${v6_lines}"
+        fi
+
+        local grand_total_pkts=$((v4_total_pkts + v6_total_pkts))
+        local grand_total_bytes=$((v4_total_bytes + v6_total_bytes))
+        local fmt_grand_bytes=$(format_bytes "${grand_total_bytes}")
+        local fmt_v4_bytes=$(format_bytes "${v4_total_bytes}")
+        local fmt_v6_bytes=$(format_bytes "${v6_total_bytes}")
+
+        echo -e " ${BOLD}【核心拦截战报总览】${NC}"
+        echo -e "  * 累计成功阻断定位次数 : ${GREEN}${BOLD}${grand_total_pkts} 次${NC} (已为宿主机及全部容器小鸡击落 ${grand_total_pkts} 次潜在定位上报)"
+        echo -e "  * 累计物理阻断定位流量 : ${GREEN}${BOLD}${fmt_grand_bytes}${NC}"
+        echo -e "  * 防护总闸门实时状态   : $([ "${v4_active}" -eq 1 ] && echo -e "${GREEN}[ 运行中 / ACTIVE - 保护中 ]${NC}" || echo -e "${RED}[ 未激活 / INACTIVE ]${NC}")"
+        echo -e "  * 内存拦截规则池规模   : IPv4: ${CYAN}${count_v4:-0}${NC} 个节点 | IPv6: ${CYAN}${count_v6:-0}${NC} 个节点"
+        echo -e " --------------------------------------------------------------------------------"
+
+        echo -e " ${BOLD}【IPv4 细分规则拦截战报 (详细命中)】${NC}"
+        if [ "${v4_active}" -eq 1 ]; then
+            while read -r pkts bytes target prot opt in_if out_if src dst rest; do
+                [ -z "${pkts}" ] && continue
+                local tag="[扩展规则]"
+                local desc="自定义扩展规则"
+                if echo "${rest}" | grep -q "match-set.*tcp-reset"; then
+                    tag="[IPSet-TCP]"
+                    desc="IPSet 核心定位目标池 (TCP 握手直接熔断)"
+                elif echo "${rest}" | grep -q "match-set.*icmp"; then
+                    tag="[IPSet-UDP]"
+                    desc="IPSet 核心定位目标池 (UDP/ICMP 阻断)"
+                elif echo "${rest}" | grep -q "geolocation.googleapis.com"; then
+                    tag="[SNI-Google]"
+                    desc="Google 定位 API (TLS Client Hello 熔断)"
+                elif echo "${rest}" | grep -q "gs-loc.apple.com"; then
+                    tag="[SNI-Apple]"
+                    desc="Apple 定位服务 (TLS Client Hello 熔断)"
+                elif echo "${rest}" | grep -q "maps-api.apple.com"; then
+                    tag="[SNI-AppleMap]"
+                    desc="Apple 地图服务 (TLS Client Hello 熔断)"
+                elif echo "${rest}" | grep -q "location.services.mozilla.com"; then
+                    tag="[SNI-Mozilla]"
+                    desc="Mozilla MLS 定位 (TLS Client Hello 熔断)"
+                fi
+                local rule_bytes
+                rule_bytes=$(format_bytes "${bytes}")
+                echo -e "  * ${CYAN}${tag}${NC} ${desc} : 成功拦截 ${GREEN}${BOLD}${pkts} 次${NC} (阻断数据: ${GREEN}${rule_bytes}${NC})"
+            done <<< "${v4_lines}"
+
+            echo ""
+            echo -e "  * IPv4 统计小计: 累计拦截 ${GREEN}${BOLD}${v4_total_pkts} 次${NC} | 累计丢弃定位流量 ${GREEN}${BOLD}${fmt_v4_bytes}${NC}"
+        else
+            echo -e "  ${YELLOW}未检测到 IPv4 NOANYLOC 规则链，防护尚未开启。${NC}"
+        fi
+        echo -e " --------------------------------------------------------------------------------"
+
+        if has_ipv6 && [ "${v6_active}" -eq 1 ]; then
+            echo -e " ${BOLD}【IPv6 细分规则拦截战报 (详细命中)】${NC}"
+            while read -r pkts bytes target prot opt in_if out_if src dst rest; do
+                [ -z "${pkts}" ] && continue
+                local tag="[IPv6-扩展]"
+                local desc="IPv6 自定义拦截规则"
+                if echo "${rest}" | grep -q "match-set.*tcp-reset"; then
+                    tag="[IPv6-TCP]"
+                    desc="IPv6 IPSet 核心定位池 (TCP 握手直接熔断)"
+                elif echo "${rest}" | grep -q "match-set.*icmp"; then
+                    tag="[IPv6-ICMP]"
+                    desc="IPv6 IPSet 核心定位池 (ICMPv6 阻断)"
+                elif echo "${rest}" | grep -q "geolocation.googleapis.com"; then
+                    tag="[IPv6-Google]"
+                    desc="Google 定位 API (IPv6 SNI 握手熔断)"
+                elif echo "${rest}" | grep -q "gs-loc.apple.com"; then
+                    tag="[IPv6-Apple]"
+                    desc="Apple 定位服务 (IPv6 SNI 握手熔断)"
+                elif echo "${rest}" | grep -q "maps-api.apple.com"; then
+                    tag="[IPv6-AppleMap]"
+                    desc="Apple 地图服务 (IPv6 SNI 握手熔断)"
+                elif echo "${rest}" | grep -q "location.services.mozilla.com"; then
+                    tag="[IPv6-Mozilla]"
+                    desc="Mozilla MLS 定位 (IPv6 SNI 握手熔断)"
+                fi
+                local rule_bytes
+                rule_bytes=$(format_bytes "${bytes}")
+                echo -e "  * ${CYAN}${tag}${NC} ${desc} : 成功拦截 ${GREEN}${BOLD}${pkts} 次${NC} (阻断数据: ${GREEN}${rule_bytes}${NC})"
+            done <<< "${v6_lines}"
+
+            echo ""
+            echo -e "  * IPv6 统计小计: 累计拦截 ${GREEN}${BOLD}${v6_total_pkts} 次${NC} | 累计丢弃定位流量 ${GREEN}${BOLD}${fmt_v6_bytes}${NC}"
+            echo -e " --------------------------------------------------------------------------------"
+        fi
+
+        echo -e "${CYAN}${BOLD}================================================================================${NC}"
+        echo -e "  ${BOLD}[C]${NC} 清零统计计数器 (重置数据包统计)   ${BOLD}[R]${NC} 实时刷新   ${BOLD}[回车键]${NC} 返回主菜单"
+        echo -e "${CYAN}${BOLD}================================================================================${NC}"
+        read -r -p "请选择操作 [c/r/回车]: " op_act
+        case "${op_act}" in
+            [cC])
+                iptables -Z "${CHAIN_NAME}" 2>/dev/null || true
+                if has_ipv6 && command -v ip6tables >/dev/null 2>&1; then
+                    ip6tables -Z "${CHAIN_NAME}" 2>/dev/null || true
+                fi
+                log_info "所有拦截计数器已成功清零重置！"
+                sleep 1
+                ;;
+            [rR])
+                continue
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
+}
+
+# ==============================================================================
+# 在线更新升级功能 (从 GitHub 官方仓库拉取最新版)
+# ==============================================================================
+
+update_self() {
+    clear
+    echo -e "${CYAN}${BOLD}======================================================================${NC}"
+    echo -e "${CYAN}${BOLD}           NoAnyLoc-Host 在线检查与更新 (GitHub 官方源)               ${NC}"
+    echo -e "${CYAN}${BOLD}======================================================================${NC}"
+    echo -e "  当前本地版本 : ${GREEN}${SCRIPT_VERSION}${NC}"
+    echo -e "  官方开源仓库 : ${CYAN}https://github.com/0xdabiaoge/NoAnyLoc${NC}"
+    echo -e "  正在连接 GitHub 检索最新版本，请稍候...\n"
+
+    local tmp_new="/tmp/noanyloc_update.sh"
+    rm -f "${tmp_new}"
+
+    # 优先从官方 Raw 拉取，超时 6 秒自动切换到加速镜像
+    local downloaded=0
+    if curl -fsSL -m 8 "${GITHUB_RAW_URL}" -o "${tmp_new}" 2>/dev/null; then
+        downloaded=1
+    elif curl -fsSL -m 8 "${GHPROXY_RAW_URL}" -o "${tmp_new}" 2>/dev/null; then
+        downloaded=1
+        log_info "已通过全球加速节点成功获取更新脚本。"
     fi
 
-    if has_ipv6 && command -v ip6tables >/dev/null 2>&1; then
-        echo -e "${BOLD}【IPv6 命中统计】${NC}"
-        if ip6tables -L "${CHAIN_NAME}" -v -n 2>/dev/null; then
-            echo ""
-        else
-            echo -e "${YELLOW}未检测到 IPv6 NOANYLOC 链。${NC}\n"
+    if [ "${downloaded}" -ne 1 ] || [ ! -s "${tmp_new}" ]; then
+        log_err "从 GitHub 获取最新脚本失败，请检查宿主机外网网络连通性！"
+        rm -f "${tmp_new}"
+        read -r -p "按回车键返回主菜单..."
+        return 1
+    fi
+
+    # 完整性校验：检查文件必须包含核心标识与函数
+    if ! grep -q "NOANYLOC" "${tmp_new}" || ! grep -q "check_os" "${tmp_new}"; then
+        log_err "下载到的脚本文件完整性校验失败（可能被网络劫持或源站尚未同步），已终止更新！"
+        rm -f "${tmp_new}"
+        read -r -p "按回车键返回主菜单..."
+        return 1
+    fi
+
+    # 提取远程版本号
+    local remote_version
+    remote_version=$(grep -E '^SCRIPT_VERSION=' "${tmp_new}" | head -n1 | cut -d'"' -f2)
+    [ -z "${remote_version}" ] && remote_version="最新版"
+
+    echo -e "  最新远程版本 : ${GREEN}${remote_version}${NC}"
+    echo ""
+
+    if [ "${remote_version}" = "${SCRIPT_VERSION}" ]; then
+        read -r -p "当前已经是最新版本 (${SCRIPT_VERSION})，是否强制重新覆盖更新？(y/N): " force_up
+        if [[ ! "${force_up}" =~ ^[yY]$ ]]; then
+            log_info "已取消更新。"
+            rm -f "${tmp_new}"
+            sleep 1
+            return 0
         fi
     fi
 
-    echo -e "${BOLD}【IPSet 集合规模】${NC}"
-    local count_v4="0"
-    local count_v6="0"
-    if command -v ipset >/dev/null 2>&1; then
-        count_v4=$(ipset list "${IPSET4}" 2>/dev/null | grep -E '^Number of entries:' | awk '{print $4}' || echo "0")
-        count_v6=$(ipset list "${IPSET6}" 2>/dev/null | grep -E '^Number of entries:' | awk '{print $4}' || echo "0")
+    log_info "正在平滑覆盖安装新版本..."
+    chmod +x "${tmp_new}"
+    
+    # 覆盖系统全局命令与当前脚本自身
+    cp -f "${tmp_new}" "${SCRIPT_PATH}"
+    chmod +x "${SCRIPT_PATH}"
+
+    local current_exec
+    current_exec="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
+    if [ -f "${current_exec}" ] && [ "${current_exec}" != "${SCRIPT_PATH}" ]; then
+        cp -f "${tmp_new}" "${current_exec}"
+        chmod +x "${current_exec}"
     fi
-    echo -e "  * IPv4 拦截池条目数: ${GREEN}${count_v4:-0}${NC} 个"
-    echo -e "  * IPv6 拦截池条目数: ${GREEN}${count_v6:-0}${NC} 个"
+
+    rm -f "${tmp_new}"
     echo ""
-    read -r -p "按回车键返回主菜单..."
+    log_info "NoAnyLoc 系统已成功平滑升级至 ${remote_version}！"
+
+    read -r -p "是否立即重载并应用最新防送中规则库？(Y/n): " reload_rules
+    if [[ ! "${reload_rules}" =~ ^[nN]$ ]]; then
+        apply_rules
+    fi
+
+    read -r -p "升级完成！按回车键返回主菜单..."
 }
 
 # ==============================================================================
@@ -816,11 +1044,12 @@ main_menu() {
         echo -e "  ${BOLD}3.${NC} 立即强制刷新 IP 资产池 (多路 DNS 并发解析并原子替换)"
         echo -e "  ${BOLD}4.${NC} 运行【全景送中健康体检】(深度探测 Google/YouTube/Cloudflare)"
         echo -e "  ${BOLD}5.${NC} 配置自动保鲜守护参数 (修改刷新周期 / 调整 SNI 阻断)"
-        echo -e "  ${BOLD}6.${NC} 查看实时拦截命中与数据包统计"
-        echo -e "  ${BOLD}7.${NC} 彻底卸载此脚本与所有自启服务"
+        echo -e "  ${BOLD}6.${NC} 查看【实时拦截战报与命中统计】(详细阻断次数与可视化仪表盘)"
+        echo -e "  ${BOLD}7.${NC} 检查并在线更新脚本 (从 GitHub 官方源拉取最新版)"
+        echo -e "  ${BOLD}8.${NC} 彻底卸载此脚本与所有自启服务"
         echo -e "  ${BOLD}0.${NC} 退出控制台"
         echo -e "${CYAN}${BOLD}======================================================================${NC}"
-        read -r -p "请选择操作 [0-7]: " choice
+        read -r -p "请选择操作 [0-8]: " choice
 
         case "${choice}" in
             1)
@@ -846,6 +1075,9 @@ main_menu() {
                 show_detailed_status
                 ;;
             7)
+                update_self
+                ;;
+            8)
                 uninstall_all
                 ;;
             0)
@@ -853,7 +1085,7 @@ main_menu() {
                 exit 0
                 ;;
             *)
-                log_warn "无效选项，请输入 0-7。"
+                log_warn "无效选项，请输入 0-8。"
                 sleep 1
                 ;;
         esac
@@ -883,7 +1115,10 @@ case "${1:-}" in
     update|refresh)
         apply_rules
         ;;
-    status)
+    upgrade|update-self)
+        update_self
+        ;;
+    status|stats|log)
         detect_host_network
         show_detailed_status
         ;;
