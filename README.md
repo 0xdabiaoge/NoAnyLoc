@@ -83,23 +83,29 @@ Google 和各大厂的大数据中枢收到请求后，会发现：**“这个�
 ## 🚀 快速开始
 
 ### 系统要求
-* **操作系统**：Debian 11 / 12、Ubuntu 20.04 / 22.04 / 24.04、Proxmox VE (PVE 7 / 8) 等 Debian 系宿主机。
+* **操作系统**：Debian 11 / 12、Ubuntu 20.04 / 22.04 / 24.04、Proxmox VE (PVE 7 / 8) 等 Debian / Ubuntu 系列宿主机。
 * **权限要求**：`root` 权限。
 
-### 一键部署运行
+### ⚡ 极速一键安装命令
 
-进入宿主机母机终端执行：
+在宿主机母机终端中复制并执行以下任一命令即可：
 
+#### 方案 A：一键极速运行控制台（推荐）
 ```bash
-# 1. 下载脚本
-curl -fsSL https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/noanyloc.sh -o /root/noanyloc.sh
-
-# 2. 赋予执行权限
-chmod +x /root/noanyloc.sh
-
-# 3. 启动交互式中文控制台
-/root/noanyloc.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/0xdabiaoge/NoAnyLoc/main/noanyloc.sh)
 ```
+*(加速镜像备用：`bash <(curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/0xdabiaoge/NoAnyLoc/main/noanyloc.sh)`)*
+
+#### 方案 B：一键静默安装并立即开启全局防护（适合批量脚本编排）
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/0xdabiaoge/NoAnyLoc/main/noanyloc.sh) start
+```
+
+#### 方案 C：安装为系统全局命令 `noanyloc`
+```bash
+curl -fsSL https://raw.githubusercontent.com/0xdabiaoge/NoAnyLoc/main/noanyloc.sh -o /usr/local/bin/noanyloc && chmod +x /usr/local/bin/noanyloc
+```
+安装后，随时在终端直接输入 `noanyloc` 即可调出管理控制台！
 
 ---
 
