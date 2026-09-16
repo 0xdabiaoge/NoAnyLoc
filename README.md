@@ -119,8 +119,8 @@ curl -fsSL https://raw.githubusercontent.com/0xdabiaoge/NoAnyLoc/main/noanyloc.s
       专为 Debian / Ubuntu (含 Proxmox VE) 宿主机打造 | 纯 Shell 打造 
 ======================================================================
  【宿主机网络信息】
-  * 公网 IPv4 地址 : 78.31.249.125
-  * 公网 IPv6 状态 : 未启用或无路由
+  * 公网 IPv4 地址 : 198.51.100.88
+  * 公网 IPv6 状态 : 2606:4700::1 [已启用]
   * 出网物理网卡   : eth0
   * 容器网桥设备   : vmbr0, lxcbr0
  --------------------------------------------------------------------
@@ -190,19 +190,19 @@ curl -fsSL https://raw.githubusercontent.com/0xdabiaoge/NoAnyLoc/main/noanyloc.s
            宿主机 IP 全景“送中”健康体检报告                     
 ================================================================
 【1. IP 基础档案与机房属性】
-  * 当前公网 IP : 78.31.249.125
-  * 注册归属地  : DE - Frankfurt am Main
-  * 运营商/ASN  : AS205548 ZOUTER LIMITED
+  * 当前公网 IP : 198.51.100.88
+  * 注册归属地  : US - Los Angeles
+  * 运营商/ASN  : AS64512 Example Datacenter
 
 【2. Google 搜索服务与位置标签检测】
   * 首页跳转检测: [正常] 正常停留在 google.com 国际站
   * 底栏地理位置: [正常/无大陆标记] 当前标注为海外正常区域
 
 【3. YouTube 流媒体区域与高级权限检测】
-  * 归属国家代码: [正常: DE] (支持后台播放与 YouTube Premium 完整功能)
+  * 归属国家代码: [正常: US] (支持后台播放与 YouTube Premium 完整功能)
 
 【4. Cloudflare 边缘定位检测】
-  * Cloudflare 判定: [海外正常: DE] (WARP状态: off)
+  * Cloudflare 判定: [海外正常: US] (WARP状态: off)
 
 【5. 本机当前防护拦截实战测试】
   * 定位 API 阻断: [拦截成功 - 流量已被拒绝或切断 (TCP RST)]
