@@ -12,7 +12,8 @@
 set -o pipefail
 
 # 全局配置常量
-SCRIPT_VERSION="v2.1"
+# 全局配置常量
+SCRIPT_VERSION="v2.2"
 GITHUB_RAW_URL="https://raw.githubusercontent.com/0xdabiaoge/NoAnyLoc/main/noanyloc.sh"
 GHPROXY_RAW_URL="https://ghfast.top/https://raw.githubusercontent.com/0xdabiaoge/NoAnyLoc/main/noanyloc.sh"
 
@@ -38,17 +39,34 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-# 内置高精度定位 API 域名列表（严格剔除 www.googleapis.com 等业务域名，零误杀）
+# 专享独立物理 IP 的高精度定位 API（通过四层 IPSet 极速拦截，且绝对不会误杀应用商店）
 DEFAULT_DOMAINS="
-geolocation.googleapis.com
-geocode.googleapis.com
-gspe1-ssl.ls.apple.com
 gs-loc.apple.com
+gs-loc-cn.apple.com
+gspe1-ssl.ls.apple.com
+gsp-ssl.ls.apple.com
+configuration.ls.apple.com
 maps-api.apple.com
-ls.apple.com
 location.services.mozilla.com
 location.microsoft.com
 inference.location.live.net
+api.beacondb.net
+api.skyhookwireless.com
+"
+
+# 七层 TLS SNI 深度包检测熔断域名（彻底解决 Google 共享 Anycast VIP 难题，保护 Google Play / 安卓核心业务，并为全生态提供双保险）
+DEFAULT_SNI_DOMAINS="
+geolocation.googleapis.com
+geocode.googleapis.com
+gs-loc.apple.com
+gs-loc-cn.apple.com
+.ls.apple.com
+maps-api.apple.com
+location.services.mozilla.com
+location.microsoft.com
+inference.location.live.net
+beacondb.net
+skyhookwireless.com
 "
 
 # 公共 DNS 列表（并发解析，抵御 Anycast 节点局限与 DNS 污染）
@@ -137,18 +155,22 @@ init_env() {
     mkdir -p "${CONF_DIR}"
     if [ ! -f "${DOMAINS_FILE}" ]; then
         cat <<EOF > "${DOMAINS_FILE}"
-# NoAnyLoc 拦截域名列表
-# 每一行代表一个需要阻断的定位 API 域名
-# 默认配置已排除正常业务域名，请谨慎添加！
-geolocation.googleapis.com
-geocode.googleapis.com
-gspe1-ssl.ls.apple.com
+# NoAnyLoc 四层 IPSet 定位拦截域名列表
+# 专享独立 IP 的定位服务进入此列表（通过 IPSet 毫秒级极速阻断）：
 gs-loc.apple.com
+gs-loc-cn.apple.com
+gspe1-ssl.ls.apple.com
+gsp-ssl.ls.apple.com
+configuration.ls.apple.com
 maps-api.apple.com
-ls.apple.com
 location.services.mozilla.com
 location.microsoft.com
 inference.location.live.net
+api.beacondb.net
+api.skyhookwireless.com
+
+# 注意：Google 定位由于与 Google Play 商店共享 Anycast VIP 池，
+# 已由系统底层七层 SNI（xt_string）引擎自动精准接管，绝不误伤 Play 商店！
 EOF
     fi
 
@@ -242,14 +264,24 @@ resolve_targets() {
     touch "${v4_tmp_file}" "${v6_tmp_file}"
 
     # 读取域名配置
-    local domains
+    local raw_domains
     if [ -f "${DOMAINS_FILE}" ]; then
-        domains=$(grep -vE '^\s*#|^\s*$' "${DOMAINS_FILE}")
+        raw_domains=$(grep -vE '^\s*#|^\s*$' "${DOMAINS_FILE}")
     else
-        domains="${DEFAULT_DOMAINS}"
+        raw_domains="${DEFAULT_DOMAINS}"
     fi
 
-    log_info "正在利用多路权威 DNS 并发解析定位 API IP 资产池..."
+    # 智能分离：含有 Google Anycast 共享 VIP 属性的域名坚决不进四层 IPSet，统一由七层 SNI 精准熔断
+    local domains=""
+    for d in ${raw_domains}; do
+        if [[ "${d}" =~ googleapis\.com ]]; then
+            log_warn "域名 [${d}] 具有 Google GFE Anycast 共享 VIP 属性，已转入底层七层 SNI 精准熔断引擎，避免误杀 Google Play。"
+        else
+            domains="${domains} ${d}"
+        fi
+    done
+
+    log_info "正在利用多路权威 DNS 并发解析独立定位 API IP 资产池..."
 
     for domain in ${domains}; do
         # 1. 本机 getent / ahostsv4 解析
@@ -338,11 +370,7 @@ apply_rules() {
     iptables -N "${CHAIN_NAME}" 2>/dev/null || true
     iptables -F "${CHAIN_NAME}"
 
-    # REJECT 规则：针对 TCP 回送 RST，针对 UDP/ICMP 回送 unreachable，让客户端瞬间放弃
-    iptables -A "${CHAIN_NAME}" -m set --match-set "${IPSET4}" dst -p tcp -j REJECT --reject-with tcp-reset
-    iptables -A "${CHAIN_NAME}" -m set --match-set "${IPSET4}" dst -j REJECT --reject-with icmp-port-unreachable
-
-    # 进阶特性：SNI 字符串熔断（若内核支持且配置开启）
+    # 进阶特性：七层 SNI 深度包检测精准熔断（置于首部，精准狙击 Google 定位等共享 VIP，绝不误杀 Google Play）
     local enable_sni=1
     if [ -f "${CONFIG_FILE}" ]; then
         # shellcheck disable=SC1090
@@ -351,12 +379,15 @@ apply_rules() {
     fi
 
     if [ "${enable_sni}" = "1" ] && has_xt_string; then
-        # 针对 TLS Client Hello 的 SNI 扩展通常位于握手包前 200 字节，限定搜索区间降低 CPU 消耗并防止误杀
-        iptables -A "${CHAIN_NAME}" -p tcp --dport 443 -m string --string "geolocation.googleapis.com" --algo bm --from 40 --to 180 -j REJECT --reject-with tcp-reset 2>/dev/null || true
-        iptables -A "${CHAIN_NAME}" -p tcp --dport 443 -m string --string "gs-loc.apple.com" --algo bm --from 40 --to 180 -j REJECT --reject-with tcp-reset 2>/dev/null || true
-        iptables -A "${CHAIN_NAME}" -p tcp --dport 443 -m string --string "maps-api.apple.com" --algo bm --from 40 --to 180 -j REJECT --reject-with tcp-reset 2>/dev/null || true
-        iptables -A "${CHAIN_NAME}" -p tcp --dport 443 -m string --string "location.services.mozilla.com" --algo bm --from 40 --to 180 -j REJECT --reject-with tcp-reset 2>/dev/null || true
+        for sni_domain in ${DEFAULT_SNI_DOMAINS}; do
+            iptables -A "${CHAIN_NAME}" -p tcp --dport 443 -m string --string "${sni_domain}" --algo bm -j REJECT --reject-with tcp-reset 2>/dev/null || true
+            iptables -A "${CHAIN_NAME}" -p tcp --dport 80 -m string --string "${sni_domain}" --algo bm -j REJECT --reject-with tcp-reset 2>/dev/null || true
+        done
     fi
+
+    # 四层 REJECT 规则：针对独立定位 IP 回送 RST，针对 UDP/ICMP 回送 unreachable，让客户端瞬间放弃
+    iptables -A "${CHAIN_NAME}" -m set --match-set "${IPSET4}" dst -p tcp -j REJECT --reject-with tcp-reset
+    iptables -A "${CHAIN_NAME}" -m set --match-set "${IPSET4}" dst -j REJECT --reject-with icmp-port-unreachable
 
     # 清理并挂载到系统入口：FORWARD 链（拦截全体小鸡）与 OUTPUT 链（拦截宿主机自身）
     while iptables -C FORWARD -j "${CHAIN_NAME}" 2>/dev/null; do
@@ -388,16 +419,17 @@ apply_rules() {
         ip6tables -N "${CHAIN_NAME}" 2>/dev/null || true
         ip6tables -F "${CHAIN_NAME}"
 
+        # IPv6 七层 SNI 精准熔断（置于首部）
+        if [ "${enable_sni}" = "1" ] && has_xt_string; then
+            for sni_domain in ${DEFAULT_SNI_DOMAINS}; do
+                ip6tables -A "${CHAIN_NAME}" -p tcp --dport 443 -m string --string "${sni_domain}" --algo bm -j REJECT --reject-with tcp-reset 2>/dev/null || true
+                ip6tables -A "${CHAIN_NAME}" -p tcp --dport 80 -m string --string "${sni_domain}" --algo bm -j REJECT --reject-with tcp-reset 2>/dev/null || true
+            done
+        fi
+
+        # IPv6 四层 IPSet 规则
         ip6tables -A "${CHAIN_NAME}" -m set --match-set "${IPSET6}" dst -p tcp -j REJECT --reject-with tcp-reset
         ip6tables -A "${CHAIN_NAME}" -m set --match-set "${IPSET6}" dst -j REJECT --reject-with icmp6-port-unreachable
-
-        # IPv6 SNI 熔断
-        if [ "${enable_sni}" = "1" ] && has_xt_string; then
-            ip6tables -A "${CHAIN_NAME}" -p tcp --dport 443 -m string --string "geolocation.googleapis.com" --algo bm --from 40 --to 180 -j REJECT --reject-with tcp-reset 2>/dev/null || true
-            ip6tables -A "${CHAIN_NAME}" -p tcp --dport 443 -m string --string "gs-loc.apple.com" --algo bm --from 40 --to 180 -j REJECT --reject-with tcp-reset 2>/dev/null || true
-            ip6tables -A "${CHAIN_NAME}" -p tcp --dport 443 -m string --string "maps-api.apple.com" --algo bm --from 40 --to 180 -j REJECT --reject-with tcp-reset 2>/dev/null || true
-            ip6tables -A "${CHAIN_NAME}" -p tcp --dport 443 -m string --string "location.services.mozilla.com" --algo bm --from 40 --to 180 -j REJECT --reject-with tcp-reset 2>/dev/null || true
-        fi
 
         while ip6tables -C FORWARD -j "${CHAIN_NAME}" 2>/dev/null; do
             ip6tables -D FORWARD -j "${CHAIN_NAME}" 2>/dev/null
@@ -729,22 +761,43 @@ show_detailed_status() {
                 local desc="自定义扩展规则"
                 if echo "${rest}" | grep -q "match-set.*tcp-reset"; then
                     tag="[IPSet-TCP]"
-                    desc="IPSet 核心定位目标池 (TCP 握手直接熔断)"
+                    desc="独立定位目标池 (四层 TCP 握手秒级熔断)"
                 elif echo "${rest}" | grep -q "match-set.*icmp"; then
                     tag="[IPSet-UDP]"
-                    desc="IPSet 核心定位目标池 (UDP/ICMP 阻断)"
+                    desc="独立定位目标池 (四层 UDP/ICMP 阻断)"
                 elif echo "${rest}" | grep -q "geolocation.googleapis.com"; then
-                    tag="[SNI-Google]"
-                    desc="Google 定位 API (TLS Client Hello 熔断)"
+                    tag="[SNI-Google-Geo]"
+                    desc="Google 定位 API (七层 SNI 精准熔断 · 保护Play)"
+                elif echo "${rest}" | grep -q "geocode.googleapis.com"; then
+                    tag="[SNI-Google-Code]"
+                    desc="Google 地理编码 (七层 SNI 精准熔断)"
+                elif echo "${rest}" | grep -q "gs-loc-cn.apple.com"; then
+                    tag="[SNI-Apple-CN]"
+                    desc="Apple 中国专属定位 (七层 SNI 握手熔断)"
                 elif echo "${rest}" | grep -q "gs-loc.apple.com"; then
-                    tag="[SNI-Apple]"
-                    desc="Apple 定位服务 (TLS Client Hello 熔断)"
+                    tag="[SNI-Apple-Global]"
+                    desc="Apple 全球定位服务 (七层 SNI 握手熔断)"
+                elif echo "${rest}" | grep -q "\.ls\.apple\.com"; then
+                    tag="[SNI-Apple-LS]"
+                    desc="Apple 位置子域全通配 (七层 SNI 握手熔断)"
                 elif echo "${rest}" | grep -q "maps-api.apple.com"; then
                     tag="[SNI-AppleMap]"
-                    desc="Apple 地图服务 (TLS Client Hello 熔断)"
+                    desc="Apple 地图定位服务 (七层 SNI 握手熔断)"
                 elif echo "${rest}" | grep -q "location.services.mozilla.com"; then
                     tag="[SNI-Mozilla]"
-                    desc="Mozilla MLS 定位 (TLS Client Hello 熔断)"
+                    desc="Mozilla MLS 定位 (七层 SNI 握手熔断)"
+                elif echo "${rest}" | grep -q "location.microsoft.com"; then
+                    tag="[SNI-MS-Location]"
+                    desc="Windows 位置服务 (七层 SNI 握手熔断)"
+                elif echo "${rest}" | grep -q "inference.location.live.net"; then
+                    tag="[SNI-MS-Inference]"
+                    desc="Windows 位置推断 (七层 SNI 握手熔断)"
+                elif echo "${rest}" | grep -q "beacondb.net"; then
+                    tag="[SNI-BeaconDB]"
+                    desc="开源 BeaconDB 定位 (七层 SNI 握手熔断)"
+                elif echo "${rest}" | grep -q "skyhookwireless.com"; then
+                    tag="[SNI-Skyhook]"
+                    desc="高通/Skyhook 定位 (七层 SNI 握手熔断)"
                 fi
                 local rule_bytes
                 rule_bytes=$(format_bytes "${bytes}")
@@ -766,22 +819,43 @@ show_detailed_status() {
                 local desc="IPv6 自定义拦截规则"
                 if echo "${rest}" | grep -q "match-set.*tcp-reset"; then
                     tag="[IPv6-TCP]"
-                    desc="IPv6 IPSet 核心定位池 (TCP 握手直接熔断)"
+                    desc="IPv6 IPSet 独立定位池 (TCP 握手秒级熔断)"
                 elif echo "${rest}" | grep -q "match-set.*icmp"; then
                     tag="[IPv6-ICMP]"
-                    desc="IPv6 IPSet 核心定位池 (ICMPv6 阻断)"
+                    desc="IPv6 IPSet 独立定位池 (ICMPv6 阻断)"
                 elif echo "${rest}" | grep -q "geolocation.googleapis.com"; then
-                    tag="[IPv6-Google]"
-                    desc="Google 定位 API (IPv6 SNI 握手熔断)"
+                    tag="[IPv6-Google-Geo]"
+                    desc="Google 定位 API (IPv6 SNI 精准熔断 · 保护Play)"
+                elif echo "${rest}" | grep -q "geocode.googleapis.com"; then
+                    tag="[IPv6-Google-Code]"
+                    desc="Google 地理编码 (IPv6 SNI 精准熔断)"
+                elif echo "${rest}" | grep -q "gs-loc-cn.apple.com"; then
+                    tag="[IPv6-Apple-CN]"
+                    desc="Apple 中国专属定位 (IPv6 SNI 握手熔断)"
                 elif echo "${rest}" | grep -q "gs-loc.apple.com"; then
-                    tag="[IPv6-Apple]"
-                    desc="Apple 定位服务 (IPv6 SNI 握手熔断)"
+                    tag="[IPv6-Apple-Global]"
+                    desc="Apple 全球定位服务 (IPv6 SNI 握手熔断)"
+                elif echo "${rest}" | grep -q "\.ls\.apple\.com"; then
+                    tag="[IPv6-Apple-LS]"
+                    desc="Apple 位置子域全通配 (IPv6 SNI 握手熔断)"
                 elif echo "${rest}" | grep -q "maps-api.apple.com"; then
                     tag="[IPv6-AppleMap]"
-                    desc="Apple 地图服务 (IPv6 SNI 握手熔断)"
+                    desc="Apple 地图定位服务 (IPv6 SNI 握手熔断)"
                 elif echo "${rest}" | grep -q "location.services.mozilla.com"; then
                     tag="[IPv6-Mozilla]"
                     desc="Mozilla MLS 定位 (IPv6 SNI 握手熔断)"
+                elif echo "${rest}" | grep -q "location.microsoft.com"; then
+                    tag="[IPv6-MS-Location]"
+                    desc="Windows 位置服务 (IPv6 SNI 握手熔断)"
+                elif echo "${rest}" | grep -q "inference.location.live.net"; then
+                    tag="[IPv6-MS-Inference]"
+                    desc="Windows 位置推断 (IPv6 SNI 握手熔断)"
+                elif echo "${rest}" | grep -q "beacondb.net"; then
+                    tag="[IPv6-BeaconDB]"
+                    desc="开源 BeaconDB 定位 (IPv6 SNI 握手熔断)"
+                elif echo "${rest}" | grep -q "skyhookwireless.com"; then
+                    tag="[IPv6-Skyhook]"
+                    desc="高通/Skyhook 定位 (IPv6 SNI 握手熔断)"
                 fi
                 local rule_bytes
                 rule_bytes=$(format_bytes "${bytes}")
@@ -1111,6 +1185,7 @@ case "${1:-}" in
     restart|reload)
         remove_rules
         apply_rules
+        setup_systemd_daemon
         ;;
     update|refresh)
         apply_rules

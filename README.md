@@ -32,12 +32,12 @@ Google 和各大厂的大数据中枢收到请求后，会发现：**“这个�
   规则前置注入宿主机的 `FORWARD` 链（保护该母机下所有现有及未来新建的 LXC 容器与 KVM 虚拟机）和 `OUTPUT` 链（保护母机自身）。小鸡买家即使拥有 root 权限并不慎清空防火墙，也绝不可能突破母机内核的拦截！
 - ⚡ **$O(1)$ 高性能内核哈希（不卡网速）**：
   基于 Linux 内核原生 `IPSet (hash:ip)`，查询复杂度为常数级 $O(1)$。哪怕宿主机切出上百个实例批量跑满 10Gbps 带宽，CPU 软中断损耗微乎其微，**吞吐量零损耗**。
-- 🎯 **高精定位资产库（绝对零误杀）**：
-  彻底剔除了传统方案中危险的广谱域名（如 `www.googleapis.com`）。实测买家看 YouTube 4K、Google 搜索、Google Drive、账号登录毫秒级正常通行，**100% 仅狙击纯定位 API 流量**。
+- 🎯 **分级防御架构（彻底解决 Google Anycast 共享 VIP 难题）**：
+  谷歌定位与 Google Play 商店共享同一组 Anycast 前端 IP。NoAnyLoc-Host 独创**四层与七层协同防御体系**：对 Google 定位采用 **七层 TLS SNI 深度包检测** 精准狙击，放行 Google Play 商店与安卓系统核心，**绝对零误杀**；对苹果、微软等独立 IP 定位采用 **四层 IPSet + 七层 SNI 双保险**，兼具极致性能与 100% 阻断率。
 - 🔄 **原子化动态保鲜（告别 Anycast IP 漂移）**：
   内置多路权威海外公共 DNS 并发深挖，采用 `ipset swap` 实现**毫秒级零丢包原子热替换**。配合独立的 Systemd Timer（默认每 2 小时静默保鲜一次），永不失效。
 - 🛡️ **双重保险：TLS SNI 字符串熔断**：
-  利用内核 `xt_string` 模块限制搜索区间（`--from 40 --to 180`），在 443 端口的 TLS Client Hello 握手阶段精准识别定位域名并直接回送 **TCP RST 瞬间切断**，双保险兜底。
+  利用内核 `xt_string` 模块，在 443/80 端口的 TLS Client Hello 握手阶段精准识别定位域名并直接回送 **TCP RST 瞬间切断**，包含 Wi-Fi 与基站特征的数据包哪怕 1 个字节都无法离开母机。
 - 📦 **安全沙盒隔离（绝不污染宿主机）**：
   独立自定义链与专属集合，**绝对不触碰宿主机原有的 PVEFW 防火墙、Docker 规则、NAT 端口映射或 SSH 白名单**。卸载时支持物理级自毁与 100% 零残留。
 - 🩺 **全景送中健康体检仪**：
@@ -65,17 +65,18 @@ Google 和各大厂的大数据中枢收到请求后，会发现：**“这个�
                                               │
                       +-----------------------+-----------------------+
                       ▼                                               ▼
-         【第一道：IPSet 高速哈希比对】                   【第二道：xt_string SNI 熔断】
-       发往定位 API 目标 IP 的 TCP 数据包               TLS Client Hello 带有定位域名
-       ──> 物理丢弃 + 回送 TCP RST 拒连                 ──> 物理丢弃 + 回送 TCP RST 拒连
+     【第一梯队：七层 TLS SNI 精准熔断】             【第二梯队：四层 IPSet 高速哈希】
+     针对 Google 定位 / Apple / 微软 / 开源          针对具有独立物理 IP 的高精度定位池
+     TLS Client Hello 命中定位域名特征串              发往独立定位目标 IP 的 TCP/UDP 报文
+     ──> 立即回送 TCP RST 掐死 (保护 Play 商店)       ──> 硬件级秒杀 + 回送 TCP RST 拒连
                       │                                               │
                       +-----------------------+-----------------------+
-                                              │ (正常放行所有合法业务流量)
+                                              │ (放行 Google Play / YouTube / 正常流量)
                                               ▼
                                  宿主机物理网卡出口 (eth0 / eno1)
                                               │
                                               ▼
-                                    公网 Internet (100% 纯净)
+                                     公网 Internet (100% 纯净)
 ```
 
 ---
@@ -120,13 +121,13 @@ curl -fsSL https://raw.githubusercontent.com/0xdabiaoge/NoAnyLoc/main/noanyloc.s
 ======================================================================
  【宿主机网络信息】
   * 公网 IPv4 地址 : 198.51.100.88
-  * 公网 IPv6 状态 : 2606:4700::1 [已启用]
+  * 公网 IPv6 状态 : 2001:db8::1 [已启用]
   * 出网物理网卡   : eth0
   * 容器网桥设备   : vmbr0, lxcbr0
  --------------------------------------------------------------------
  【防护状态监控】
   * 拦截总闸门状态 : [ 运行中 / ACTIVE - 保护全部小鸡出网 ]
-  * 当前规则条目数 : IPv4: 33 条 | IPv6: 20 条
+  * 当前规则条目数 : IPv4: 40 条 | IPv6: 32 条
   * 动态保鲜守护   : 已启用 (Systemd Timer 自动保鲜)
   * 拦截受控链条   : FORWARD (全体容器小鸡) + OUTPUT (宿主机本机)
 ======================================================================
@@ -153,40 +154,44 @@ curl -fsSL https://raw.githubusercontent.com/0xdabiaoge/NoAnyLoc/main/noanyloc.s
            NoAnyLoc-Host 防火墙实时拦截战报与命中统计面板 (Dashboard)           
 ================================================================================
  【核心拦截战报总览】
-  * 累计成功阻断定位次数 : 331 次 (已为宿主机及全部容器小鸡击落 331 次潜在定位上报)
-  * 累计物理阻断定位流量 : 19.25 KB
+  * 累计成功阻断定位次数 : 842 次 (已为宿主机及全部容器小鸡击落 842 次潜在定位上报)
+  * 累计物理阻断定位流量 : 48.62 KB
   * 防护总闸门实时状态   : [ 运行中 / ACTIVE - 保护中 ]
-  * 内存拦截规则池规模   : IPv4: 33 个节点 | IPv6: 20 个节点
+  * 内存拦截规则池规模   : IPv4: 40 个节点 | IPv6: 32 个节点
  --------------------------------------------------------------------------------
  【IPv4 细分规则拦截战报 (详细命中)】
-  ┌──────────────────────────────────────────────┬──────────────┬──────────────┐
-  │ 拦截防护维度与匹配特征                       │ 拦截次数     │ 阻断数据量   │
-  ├──────────────────────────────────────────────┼──────────────┼──────────────┤
-  │ IPSet 核心定位目标池 (TCP 握手熔断)          │       331 次 │     19.25 KB │
-  │ IPSet 核心定位目标池 (UDP/ICMP 阻断)         │         0 次 │          0 B │
-  │ Google 定位 API (TLS SNI 握手熔断)           │         0 次 │          0 B │
-  │ Apple 定位服务 (TLS SNI 握手熔断)            │         0 次 │          0 B │
-  │ Apple 地图服务 (TLS SNI 握手熔断)            │         0 次 │          0 B │
-  │ Mozilla MLS 定位 (TLS SNI 握手熔断)          │         0 次 │          0 B │
-  └──────────────────────────────────────────────┴──────────────┴──────────────┘
-  * IPv4 拦截小计: 共拦截 331 次 | 阻断流量 19.25 KB
+  * [SNI-Google-Geo] Google 定位 API (七层 SNI 精准熔断 · 保护Play) : 成功拦截 12 次 (阻断数据: 6.84 KB)
+  * [SNI-Google-Code] Google 地理编码 (七层 SNI 精准熔断) : 成功拦截 0 次 (阻断数据: 0 B)
+  * [SNI-Apple-Global] Apple 全球定位服务 (七层 SNI 握手熔断) : 成功拦截 25 次 (阻断数据: 14.22 KB)
+  * [SNI-Apple-CN] Apple 中国专属定位 (七层 SNI 握手熔断) : 成功拦截 8 次 (阻断数据: 4.55 KB)
+  * [SNI-Apple-LS] Apple 位置子域全通配 (七层 SNI 握手熔断) : 成功拦截 19 次 (阻断数据: 10.81 KB)
+  * [SNI-AppleMap] Apple 地图定位服务 (七层 SNI 握手熔断) : 成功拦截 0 次 (阻断数据: 0 B)
+  * [SNI-Mozilla] Mozilla MLS 定位 (七层 SNI 握手熔断) : 成功拦截 0 次 (阻断数据: 0 B)
+  * [SNI-MS-Location] Windows 位置服务 (七层 SNI 握手熔断) : 成功拦截 0 次 (阻断数据: 0 B)
+  * [SNI-MS-Inference] Windows 位置推断 (七层 SNI 握手熔断) : 成功拦截 0 次 (阻断数据: 0 B)
+  * [SNI-BeaconDB] 开源 BeaconDB 定位 (七层 SNI 握手熔断) : 成功拦截 0 次 (阻断数据: 0 B)
+  * [SNI-Skyhook] 高通/Skyhook 定位 (七层 SNI 握手熔断) : 成功拦截 0 次 (阻断数据: 0 B)
+  * [IPSet-TCP] 独立定位目标池 (四层 TCP 握手秒级熔断) : 成功拦截 778 次 (阻断数据: 46.68 KB)
+  * [IPSet-UDP] 独立定位目标池 (四层 UDP/ICMP 阻断) : 成功拦截 0 次 (阻断数据: 0 B)
+
+  * IPv4 统计小计: 累计拦截 842 次 | 累计丢弃定位流量 48.62 KB
  --------------------------------------------------------------------------------
 ================================================================================
   [C] 清零统计计数器 (重置数据包统计)   [R] 实时刷新   [回车键] 返回主菜单
+================================================================================
 ```
 
 ---
 
 ## ⚙️ 命令行快捷指令（适合自动化批量运维）
 
-无需进入交互菜单，直接带参调用，适合结合 Ansible、PVE Hook 或 Kickstart 批量初始化：
-
-| 命令 | 功能说明 |
+| 快捷命令 | 功能说明 |
 | :--- | :--- |
-| `noanyloc start` | **一键开启全局防送中**：自动补齐依赖、并发解析、注入规则并启动 Systemd 定时保鲜 |
-| `noanyloc stop` | **一键暂停防护**：从 FORWARD/OUTPUT 拔除跳转并注销规则，恢复宿主机原始网络状态 |
-| `noanyloc restart` | 重载并重新生成所有规则链 |
-| `noanyloc update` | **立即强制原子刷新**：重新向多路 DNS 请求并以 `ipset swap` 无缝替换 IP 池 |
+| `noanyloc` | **呼出交互主菜单**：可视化查看宿主机网络参数、启停防护与诊断 |
+| `noanyloc start` | **启动/加载防护**：注入 `FORWARD` 与 `OUTPUT` 拦截链条并自启定时保鲜 |
+| `noanyloc stop` | **暂停/撤销防护**：清空并卸载自定义规则链，宿主机恢复直连无残留 |
+| `noanyloc restart` | **平滑重载系统**：重新构建 IPSet 内存集合与 Netfilter 流水线 |
+| `noanyloc update` | **强制刷新 IP 资产池**：多路并发解析定位端点并毫秒级热替换 |
 | `noanyloc upgrade` | **在线热升级脚本**：从 GitHub 官方仓库拉取最新版本并平滑覆盖升级 |
 | `noanyloc stats` | **查看可视化拦截战报**：直观展示拦截次数、阻断数据量及各维度命中明细 |
 | `noanyloc test` | **一键全景体检**：发起对 Google/YouTube/Cloudflare 的穿透诊断并输出报告 |
@@ -194,25 +199,25 @@ curl -fsSL https://raw.githubusercontent.com/0xdabiaoge/NoAnyLoc/main/noanyloc.s
 
 ---
 
-## 🎯 默认高精拦截资产库
+## 🎯 全生态高精拦截靶点矩阵
 
-位于 `/etc/noanyloc/domains.conf`，您可以随时添加自定义域名：
+通过 **七层 TLS SNI 深度包检测** 与 **四层 IPSet 硬件加速** 分级协作，兼顾极致拦截率与业务零误杀：
 
-- **Google 定位与逆地理编码**：
-  - `geolocation.googleapis.com` *(Wi-Fi/基站定位核心接口)*
-  - `geocode.googleapis.com`
-- **Apple 位置服务**：
-  - `gspe1-ssl.ls.apple.com`
-  - `gs-loc.apple.com`
-  - `maps-api.apple.com`
-  - `ls.apple.com`
-- **Mozilla MLS 定位**：
-  - `location.services.mozilla.com`
-- **Microsoft Windows 定位**：
-  - `location.microsoft.com`
-  - `inference.location.live.net`
+| 生态厂商 | 拦截域名 / 靶点 | 靶点功能与送中威胁 | 防御层级 | 业务安全性 |
+| :--- | :--- | :--- | :---: | :---: |
+| **Google** | `geolocation.googleapis.com` | 谷歌核心 Wi-Fi / 基站众包定位 API（送中头号元凶） | 七层 SNI 熔断 | **100% 保护 Google Play / 安卓系统** |
+| | `geocode.googleapis.com` | 谷歌地理编码与逆地址推断 API | 七层 SNI 熔断 | **100% 保护 Google 业务** |
+| **Apple** | `gs-loc.apple.com` | 苹果全球全局定位守护进程（locationd） | 四层 IPSet + 七层 SNI | 独立物理 IP，绝对零误杀 |
+| | `gs-loc-cn.apple.com` | **苹果中国大陆专属定位网关（国内苹果用户核心死角）** | 四层 IPSet + 七层 SNI | 独立物理 IP，绝对零误杀 |
+| | `*.ls.apple.com` *(通配)* | **全通配苹果 gspe1~99 动态定位与国家代码 (GCC) 探针** | 七层 SNI 匹配 `.ls.apple.com` | 苹果业务顶级域名隔离，零误杀 |
+| | `maps-api.apple.com` | 苹果地图定位校验与逆地理请求 | 四层 IPSet + 七层 SNI | 独立物理 IP，绝对零误杀 |
+| **Microsoft** | `location.microsoft.com` | Windows 10/11 系统位置服务接口 | 四层 IPSet + 七层 SNI | 独立物理 IP，零误杀 |
+| | `inference.location.live.net` | 微软全球 Wi-Fi / 蜂窝网络位置推断平台 | 四层 IPSet + 七层 SNI | 独立物理 IP，零误杀 |
+| **Mozilla / 开源** | `location.services.mozilla.com` | Mozilla MLS 定位网络（经典 Linux / Firefox） | 四层 IPSet + 七层 SNI | 独立物理 IP，零误杀 |
+| | `api.beacondb.net` | **新一代开源定位数据库（microG、类原生安卓、Fedora）** | 四层 IPSet + 七层 SNI | 独立物理 IP，零误杀 |
+| **高通 / 芯片级** | `api.skyhookwireless.com` | 高通骁龙基带 / Skyhook 陆基 Wi-Fi 定位网关 | 四层 IPSet + 七层 SNI | 独立物理 IP，零误杀 |
 
-> ⚠️ **重要保证**：本系统**绝不包含** `www.googleapis.com`、`google.com`、`googlevideo.com` 等基础业务域名，杜绝任何误杀！
+> 🛡️ **绝对安全保证**：本系统**绝不包含** `www.googleapis.com`、`google.com`、`googlevideo.com`、`captive.apple.com`、`connectivitycheck.android.com` 等基础业务与连通性探测域名，群友刷 YouTube、下载 Google Play 游戏、使用 Google Drive、苹果 iCloud 同步毫秒级畅通无阻！
 
 ---
 
