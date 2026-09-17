@@ -207,6 +207,9 @@ curl -fsSL https://raw.githubusercontent.com/0xdabiaoge/NoAnyLoc/main/noanyloc.s
 | :--- | :--- | :--- | :---: | :---: |
 | **Google** | `geolocation.googleapis.com` | 谷歌核心 Wi-Fi / 基站众包定位 API（送中头号元凶） | 七层 SNI 熔断 | **100% 保护 Google Play / 安卓系统** |
 | | `geocode.googleapis.com` | 谷歌地理编码与逆地址推断 API | 七层 SNI 熔断 | **100% 保护 Google 业务** |
+| | `locationhistory-pa.googleapis.com` | **谷歌安卓系统级时间轴与位置轨迹上报接口** | 七层 SNI 熔断 | **100% 保护 Google 业务** |
+| | `userlocation.googleapis.com` | **谷歌安卓底层用户实时基站/Wi-Fi网络定位** | 七层 SNI 熔断 | **100% 保护 Google 业务** |
+| | `semanticlocation-pa.googleapis.com` | **谷歌语义化位置与停留地点识别服务** | 七层 SNI 熔断 | **100% 保护 Google 业务** |
 | **Apple** | `gs-loc.apple.com` | 苹果全球全局定位守护进程（locationd） | 四层 IPSet + 七层 SNI | 独立物理 IP，绝对零误杀 |
 | | `gs-loc-cn.apple.com` | **苹果中国大陆专属定位网关（国内苹果用户核心死角）** | 四层 IPSet + 七层 SNI | 独立物理 IP，绝对零误杀 |
 | | `*.ls.apple.com` *(通配)* | **全通配苹果 gspe1~99 动态定位与国家代码 (GCC) 探针** | 七层 SNI 匹配 `.ls.apple.com` | 苹果业务顶级域名隔离，零误杀 |

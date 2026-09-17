@@ -12,8 +12,7 @@
 set -o pipefail
 
 # 全局配置常量
-# 全局配置常量
-SCRIPT_VERSION="v2.2"
+SCRIPT_VERSION="v2.3"
 GITHUB_RAW_URL="https://raw.githubusercontent.com/0xdabiaoge/NoAnyLoc/main/noanyloc.sh"
 GHPROXY_RAW_URL="https://ghfast.top/https://raw.githubusercontent.com/0xdabiaoge/NoAnyLoc/main/noanyloc.sh"
 
@@ -58,6 +57,9 @@ api.skyhookwireless.com
 DEFAULT_SNI_DOMAINS="
 geolocation.googleapis.com
 geocode.googleapis.com
+locationhistory
+userlocation.googleapis.com
+semanticlocation
 gs-loc.apple.com
 gs-loc-cn.apple.com
 .ls.apple.com
@@ -771,6 +773,15 @@ show_detailed_status() {
                 elif echo "${rest}" | grep -q "geocode.googleapis.com"; then
                     tag="[SNI-Google-Code]"
                     desc="Google 地理编码 (七层 SNI 精准熔断)"
+                elif echo "${rest}" | grep -q "locationhistory"; then
+                    tag="[SNI-Google-LocHist]"
+                    desc="Google 位置历史/时间轴 (七层 SNI 精准熔断)"
+                elif echo "${rest}" | grep -q "userlocation.googleapis.com"; then
+                    tag="[SNI-Google-UserLoc]"
+                    desc="Google 用户实时网络定位 (七层 SNI 精准熔断)"
+                elif echo "${rest}" | grep -q "semanticlocation"; then
+                    tag="[SNI-Google-Semantic]"
+                    desc="Google 语义位置识别 (七层 SNI 精准熔断)"
                 elif echo "${rest}" | grep -q "gs-loc-cn.apple.com"; then
                     tag="[SNI-Apple-CN]"
                     desc="Apple 中国专属定位 (七层 SNI 握手熔断)"
@@ -829,6 +840,15 @@ show_detailed_status() {
                 elif echo "${rest}" | grep -q "geocode.googleapis.com"; then
                     tag="[IPv6-Google-Code]"
                     desc="Google 地理编码 (IPv6 SNI 精准熔断)"
+                elif echo "${rest}" | grep -q "locationhistory"; then
+                    tag="[IPv6-Google-LocHist]"
+                    desc="Google 位置历史/时间轴 (IPv6 SNI 精准熔断)"
+                elif echo "${rest}" | grep -q "userlocation.googleapis.com"; then
+                    tag="[IPv6-Google-UserLoc]"
+                    desc="Google 用户实时网络定位 (IPv6 SNI 精准熔断)"
+                elif echo "${rest}" | grep -q "semanticlocation"; then
+                    tag="[IPv6-Google-Semantic]"
+                    desc="Google 语义位置识别 (IPv6 SNI 精准熔断)"
                 elif echo "${rest}" | grep -q "gs-loc-cn.apple.com"; then
                     tag="[IPv6-Apple-CN]"
                     desc="Apple 中国专属定位 (IPv6 SNI 握手熔断)"
