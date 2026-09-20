@@ -254,6 +254,22 @@ curl -fsSL https://raw.githubusercontent.com/0xdabiaoge/NoAnyLoc/main/noanyloc.s
 
 ---
 
+## ⚠️ 免责声明 / Disclaimer
+
+1. **效果不作绝对保证**：本项目旨在通过宿主机底层防火墙（Netfilter）针对已知主流厂商（Google、Apple、Microsoft、Mozilla、高通等）的网络定位 API、系统位置历史上报与众包扫描接口进行阻断，以**最大程度降低宿主机及下属容器 IP 被“送中”的概率**。
+2. **定位判定维度的复杂性**：各大厂商（尤其是 Google）的 IP 地理位置推断机制属于高度复杂的黑盒风控体系，除了 Wi-Fi 与基站众包扫描之外，还可能融合用户在浏览器端主动授权的手机硬件 GPS 经纬度、历史 IP 数据库漂移、BGP Anycast 广播路由、WebRTC 本地探测、Google 账号历史行为关联等多重维度。
+3. **免责与风险自担**：**本项目按“现状”（AS-IS）提供，不承诺亦无法保证 100% 免疫“送中”或恢复已送中的 IP**。请使用者理性看待网络技术对抗，并在日常使用中保持良好的科学上网安全习惯（如不在代理节点下主动授权浏览器物理 GPS 定位）。作者不对使用本项目产生的任何直接或间接后果承担连带责任。
+
+---
+
+## 🙏 鸣谢 / Acknowledgements
+
+本项目灵感来源于并基于 [@edmond1294](https://github.com/edmond1294) 的开源项目 [edmond1294/NoAnyLocationCheck](https://github.com/edmond1294/NoAnyLocationCheck) 进行了工业级宿主机架构重构、IPv4/IPv6 双栈支持以及七层 TLS SNI 深度包检测熔断升级。
+
+特此感谢原作者在防送中定位拦截领域的开创性探索与无私开源贡献！
+
+---
+
 ## 📄 开源许可证
 
 本项目基于 [MIT License](LICENSE) 开源发布。
